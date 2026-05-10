@@ -482,6 +482,26 @@ class EmotionStore(BaseModel):
                 result.append((emotion_id, self.emotions[emotion_id]))
         return result
 
+    def cleanup_recent_ids(self) -> None:
+        """清理不存在或重复的最近表情 ID"""
+        cleaned_ids: List[str] = []
+        for emotion_id in self.recent_emotion_ids:
+            if emotion_id in self.emotions and emotion_id not in cleaned_ids:
+                cleaned_ids.append(emotion_id)
+        self.recent_emotion_ids = cleaned_ids[: emotion_config.MAX_RECENT_EMOTION_COUNT]
+
+    def resolve_emotion_id(self, emotion_id: str) -> Optional[str]:
+        """解析完整 ID 或唯一短前缀 ID"""
+        candidate = str(emotion_id or "").strip()
+        if not candidate:
+            return None
+        if candidate in self.emotions:
+            return candidate
+        matched_ids = [stored_id for stored_id in self.emotions if stored_id.startswith(candidate)]
+        if len(matched_ids) == 1:
+            return matched_ids[0]
+        return None
+
 
 # region: 分类图库兼容包装
 
@@ -698,7 +718,9 @@ def get_emotion_file_name(file_path: str) -> str:
 async def load_emotion_store() -> EmotionStore:
     """加载表情包存储"""
     data = await store.get(store_key="emotion_store")
-    return EmotionStore.model_validate(json.loads(data)) if data else EmotionStore()
+    emotion_store = EmotionStore.model_validate(json.loads(data)) if data else EmotionStore()
+    emotion_store.cleanup_recent_ids()
+    return emotion_store
 
 
 async def save_emotion_store(emotion_store: EmotionStore):
@@ -876,7 +898,10 @@ async def update_emotion_metadata_realtime(
         raise TypeError("Tags must be a list")
 
     emotion_store = await load_emotion_store()
-    metadata = emotion_store.get_emotion(emotion_id)
+    resolved_emotion_id = emotion_store.resolve_emotion_id(emotion_id)
+    if not resolved_emotion_id:
+        raise ValueError(f"Emotion with ID '{emotion_id}' not found")
+    metadata = emotion_store.get_emotion(resolved_emotion_id)
     if not metadata:
         raise ValueError(f"Emotion with ID '{emotion_id}' not found")
 
@@ -891,12 +916,12 @@ async def update_emotion_metadata_realtime(
     metadata.tags = cleaned_tags
     metadata.category = normalized_category
     metadata.last_updated = int(time.time())
-    emotion_store.add_emotion(emotion_id, metadata)
+    emotion_store.add_emotion(resolved_emotion_id, metadata)
     await save_emotion_store(emotion_store)
     try:
-        await upsert_emotion_vector(emotion_id, metadata)
+        await upsert_emotion_vector(resolved_emotion_id, metadata)
     except Exception:
-        emotion_store.emotions[emotion_id] = previous_metadata
+        emotion_store.emotions[resolved_emotion_id] = previous_metadata
         emotion_store.recent_emotion_ids = previous_recent_ids
         await save_emotion_store(emotion_store)
         raise
@@ -1553,13 +1578,16 @@ async def emo_search_cmd(
         emotion_id = result.payload.get("emotion_id") if result.payload else None
         if not emotion_id:
             emotion_id = format(result.id, "x")
-        metadata = emotion_store.get_emotion(emotion_id)
+        resolved_emotion_id = emotion_store.resolve_emotion_id(str(emotion_id))
+        if not resolved_emotion_id:
+            continue
+        metadata = emotion_store.get_emotion(resolved_emotion_id)
         if not metadata:
             continue
         if score < emotion_config.SIMILARITY_THRESHOLD:
             continue
-        vector_matches.append((emotion_id, metadata, score))
-        matched_ids.add(emotion_id)
+        vector_matches.append((resolved_emotion_id, metadata, score))
+        matched_ids.add(resolved_emotion_id)
 
     fallback_matches = fallback_emotion_matches(
         keyword,
@@ -1927,6 +1955,8 @@ async def emo_reindex_cmd(
         return
 
     emotion_store = await load_emotion_store()
+    emotion_store.cleanup_recent_ids()
+    await save_emotion_store(emotion_store)
     total_emotions = len(emotion_store.emotions)
 
     if total_emotions == 0:
@@ -1997,10 +2027,7 @@ async def emo_reindex_cmd(
                 ),
             )
 
-            if (
-                len(current_batch) >= batch_size
-                or emotion_id == list(emotion_store.emotions.keys())[-1]
-            ):
+            if len(current_batch) >= batch_size:
                 await client.upsert(
                     collection_name=collection_name,
                     points=current_batch,
@@ -2019,6 +2046,12 @@ async def emo_reindex_cmd(
         except Exception as e:
             logger.error(f"处理表情包失败: {emotion_id}, 错误: {e}")
             error_count += 1
+
+    if current_batch:
+        await client.upsert(
+            collection_name=collection_name,
+            points=current_batch,
+        )
 
     result = f"表情包索引重建完成！\n总计: {total_emotions} 个\n成功: {success_count} 个\n失败: {error_count} 个\n文件缺失: {missing_file_count} 个"
 
@@ -2065,7 +2098,8 @@ async def emotion_prompt_inject(_ctx: schemas.AgentCtx) -> str:
     addition_prompt = (
         "Attention: Emotion Plugin is a isolated self-managed plugin, you should not record the emotion ID manually by using other plugins. "
         "When you need to send an existing emotion, do NOT call vision just to inspect the image first. "
-        "Prefer `search_emotion` or `browse_meme_category` to get text metadata candidates, then use `get_emotion_path` for the selected emotion ID. "
+        "Prefer `search_emotion` or `browse_meme_category` to get fresh text metadata candidates, then use `get_emotion_path` for the selected emotion ID. "
+        "Do not reuse emotion IDs remembered from older turns after reindexing or metadata changes; if an ID fails, search again and use the latest candidate ID. "
         "The candidate list returned by these tools is for your internal selection only; do NOT paste or enumerate it to the user unless the user explicitly asks for options. "
         "If you already find a suitable emotion, call `get_emotion_path` and send the image directly. "
         + (
@@ -2268,25 +2302,28 @@ async def update_emotion(
     emotion_store = await load_emotion_store()
 
     # 检查表情包是否存在
-    metadata = emotion_store.get_emotion(emotion_id)
+    resolved_emotion_id = emotion_store.resolve_emotion_id(emotion_id)
+    if not resolved_emotion_id:
+        raise ValueError(f"Error: Emotion with ID '{emotion_id}' not found")
+    metadata = emotion_store.get_emotion(resolved_emotion_id)
     if not metadata:
         raise ValueError(f"Error: Emotion with ID '{emotion_id}' not found")
 
     # 更新描述和标签
     metadata = await update_emotion_metadata_realtime(
-        emotion_id=emotion_id,
+        emotion_id=resolved_emotion_id,
         description=description,
         tags=tags,
         category=category,
     )
-    logger.info(f"已实时更新表情包元数据和向量索引: {emotion_id}")
+    logger.info(f"已实时更新表情包元数据和向量索引: {resolved_emotion_id}")
 
     await message_service.push_system_message(
         _ctx.chat_key,
-        f"Successfully updated emotion metadata: {emotion_id}",
+        f"Successfully updated emotion metadata: {resolved_emotion_id}",
     )
 
-    return emotion_id
+    return resolved_emotion_id
 
 
 @plugin.mount_sandbox_method(
@@ -2319,7 +2356,10 @@ async def remove_emotion(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
     emotion_store = await load_emotion_store()
 
     # 检查表情包是否存在
-    metadata = emotion_store.get_emotion(emotion_id)
+    resolved_emotion_id = emotion_store.resolve_emotion_id(emotion_id)
+    if not resolved_emotion_id:
+        raise ValueError(f"Error: Emotion with ID '{emotion_id}' not found")
+    metadata = emotion_store.get_emotion(resolved_emotion_id)
     if not metadata:
         raise ValueError(f"Error: Emotion with ID '{emotion_id}' not found")
 
@@ -2327,12 +2367,12 @@ async def remove_emotion(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
     file_path = resolve_emotion_file_path(metadata.file_path)
 
     # 从表情包存储中删除
-    if emotion_id in emotion_store.emotions:
-        del emotion_store.emotions[emotion_id]
+    if resolved_emotion_id in emotion_store.emotions:
+        del emotion_store.emotions[resolved_emotion_id]
 
     # 从最近表情包列表中删除
-    if emotion_id in emotion_store.recent_emotion_ids:
-        emotion_store.recent_emotion_ids.remove(emotion_id)
+    if resolved_emotion_id in emotion_store.recent_emotion_ids:
+        emotion_store.recent_emotion_ids.remove(resolved_emotion_id)
 
     # 保存更新后的表情包存储
     await save_emotion_store(emotion_store)
@@ -2346,10 +2386,10 @@ async def remove_emotion(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
         await client.delete(
             collection_name=plugin.get_vector_collection_name(),
             points_selector=qdrant_models.PointIdsList(
-                points=[int(emotion_id, 16)],
+                points=[int(resolved_emotion_id, 16)],
             ),
         )
-        logger.info(f"已从Qdrant中删除表情包: {emotion_id}")
+        logger.info(f"已从Qdrant中删除表情包: {resolved_emotion_id}")
     except Exception as e:
         logger.warning(f"从Qdrant删除表情包失败，可能不存在: {e}")
 
@@ -2363,10 +2403,10 @@ async def remove_emotion(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
 
     await message_service.push_system_message(
         _ctx.chat_key,
-        f"Successfully removed emotion: {emotion_id}",
+        f"Successfully removed emotion: {resolved_emotion_id}",
     )
 
-    return f"表情包 {emotion_id} 已成功删除"
+    return f"表情包 {resolved_emotion_id} 已成功删除"
 
 
 @plugin.mount_sandbox_method(
@@ -2380,7 +2420,7 @@ async def get_emotion_path(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
     Get the path of an emotion by its ID.
 
     Args:
-        emotion_id (str): The emotion ID (**NOT PATH**)
+        emotion_id (str): The full emotion ID or a unique short ID prefix (**NOT PATH**)
 
     Returns:
         str: The path of the emotion file
@@ -2396,7 +2436,10 @@ async def get_emotion_path(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
     emotion_store = await load_emotion_store()
 
     # 获取表情包元数据
-    metadata = emotion_store.get_emotion(emotion_id)
+    resolved_emotion_id = emotion_store.resolve_emotion_id(emotion_id)
+    if not resolved_emotion_id:
+        raise ValueError(f"Error: Emotion with ID '{emotion_id}' not found")
+    metadata = emotion_store.get_emotion(resolved_emotion_id)
     if not metadata:
         raise ValueError(f"Error: Emotion with ID '{emotion_id}' not found")
 
@@ -2666,13 +2709,16 @@ async def search_emotion(
         emotion_id = result.payload.get("emotion_id") if result.payload else None
         if not emotion_id:
             emotion_id = format(result.id, "x")
-        metadata = emotion_store.get_emotion(emotion_id)
+        resolved_emotion_id = emotion_store.resolve_emotion_id(str(emotion_id))
+        if not resolved_emotion_id:
+            continue
+        metadata = emotion_store.get_emotion(resolved_emotion_id)
         if not metadata:
             continue
         if score < emotion_config.SIMILARITY_THRESHOLD:
             continue
-        vector_matches.append((emotion_id, metadata, score))
-        matched_ids.add(emotion_id)
+        vector_matches.append((resolved_emotion_id, metadata, score))
+        matched_ids.add(resolved_emotion_id)
 
     fallback_matches = fallback_emotion_matches(
         query,
