@@ -214,15 +214,15 @@ class EmotionConfig(ConfigBase):
     ALLOW_AI_COLLECT_EMOTION: bool = Field(
         default=True,
         title="允许 AI 自行收藏表情",
-        description="关闭后 AI 无法通过 collect_emotion 收集新表情，只能搜索、浏览和使用已有图库表情",
+        description="关闭后 AI 无法通过 xemo_collect_emotion 收集新表情，只能搜索、浏览和使用已有图库表情",
         json_schema_extra=ExtraField(
             i18n_title=i18n.i18n_text(
                 zh_CN="允许 AI 自行收藏表情",
                 en_US="Allow AI Emotion Collection",
             ),
             i18n_description=i18n.i18n_text(
-                zh_CN="关闭后 AI 无法通过 collect_emotion 收集新表情，只能搜索、浏览和使用已有图库表情",
-                en_US="When disabled, AI cannot collect new emotions via collect_emotion and can only use existing gallery emotions",
+                zh_CN="关闭后 AI 无法通过 xemo_collect_emotion 收集新表情，只能搜索、浏览和使用已有图库表情",
+                en_US="When disabled, AI cannot collect new emotions via xemo_collect_emotion and can only use existing gallery emotions",
             ),
         ).model_dump(),
     )
@@ -1537,7 +1537,7 @@ def get_emotion_directory_prompt_lines(emotion_store: EmotionStore) -> List[str]
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_search_cmd(
+async def xemo_search_cmd(
     context: CommandExecutionContext,
     keyword: Annotated[str, Arg("搜索关键词", positional=True, greedy=True)] = "",
 ) -> CommandResponse:
@@ -1649,7 +1649,7 @@ async def emo_search_cmd(
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_stats_cmd(context: CommandExecutionContext) -> CommandResponse:
+async def xemo_stats_cmd(context: CommandExecutionContext) -> CommandResponse:
     try:
         emotion_store = await load_emotion_store()
         client = await get_qdrant_client()
@@ -1700,7 +1700,7 @@ def _parse_emo_list_page(args_str: str) -> int:
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_list_cmd(
+async def xemo_list_cmd(
     context: CommandExecutionContext,
     args_str: Annotated[str, Arg("参数", positional=True, greedy=True)] = "",
 ) -> CommandResponse:
@@ -1773,7 +1773,7 @@ async def emo_list_cmd(
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_gallery_cmd(context: CommandExecutionContext) -> CommandResponse:
+async def xemo_gallery_cmd(context: CommandExecutionContext) -> CommandResponse:
     descriptions = sync_category_descriptions_with_filesystem()
     stats = await get_category_stats()
     if not descriptions:
@@ -1794,7 +1794,7 @@ async def emo_gallery_cmd(context: CommandExecutionContext) -> CommandResponse:
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_category_update_cmd(
+async def xemo_category_update_cmd(
     context: CommandExecutionContext,
     args_str: Annotated[str, Arg("参数", positional=True, greedy=True)] = "",
 ) -> CommandResponse:
@@ -1821,7 +1821,7 @@ async def emo_category_update_cmd(
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_category_clear_cmd(
+async def xemo_category_clear_cmd(
     context: CommandExecutionContext,
     args_str: Annotated[str, Arg("参数", positional=True, greedy=True)] = "",
 ) -> CommandResponse:
@@ -1875,7 +1875,7 @@ async def emo_category_clear_cmd(
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_sync_cmd(
+async def xemo_sync_cmd(
     context: CommandExecutionContext,
     task: Annotated[str, Arg("同步任务", positional=True)] = "status",
 ) -> CommandResponse:
@@ -1894,7 +1894,7 @@ async def emo_sync_cmd(
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_migrate_cmd(context: CommandExecutionContext) -> CommandResponse:
+async def xemo_migrate_cmd(context: CommandExecutionContext) -> CommandResponse:
     result = await migrate_emotion_paths()
     return CmdCtl.success(
         "统一图库迁移完成！\n"
@@ -1914,7 +1914,7 @@ async def emo_migrate_cmd(context: CommandExecutionContext) -> CommandResponse:
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_gallery_check_cmd(context: CommandExecutionContext) -> CommandResponse:
+async def xemo_gallery_check_cmd(context: CommandExecutionContext) -> CommandResponse:
     result = await validate_unified_gallery()
     lines = [
         "统一图库验证结果：",
@@ -1946,7 +1946,7 @@ async def emo_gallery_check_cmd(context: CommandExecutionContext) -> CommandResp
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
-async def emo_reindex_cmd(
+async def xemo_reindex_cmd(
     context: CommandExecutionContext,
     args_str: Annotated[str, Arg("参数", positional=True, greedy=True)] = "",
 ) -> AsyncIterator[CommandResponse]:
@@ -2066,8 +2066,8 @@ async def emo_reindex_cmd(
 # region: 表情包提示注入
 
 
-@plugin.mount_prompt_inject_method("emotion_prompt_inject")
-async def emotion_prompt_inject(_ctx: schemas.AgentCtx) -> str:
+@plugin.mount_prompt_inject_method("xemo_prompt_inject")
+async def xemo_prompt_inject(_ctx: schemas.AgentCtx) -> str:
     """表情包提示注入"""
     emotion_store = await load_emotion_store()
     recent_emotions = emotion_store.get_recent_emotions()
@@ -2084,7 +2084,7 @@ async def emotion_prompt_inject(_ctx: schemas.AgentCtx) -> str:
                 f"{idx}. ID: {emotion_id} - {metadata.description[:30]}... [Tags: {tags_str}]{category_str}",
             )
     else:
-        prompt_parts.append("Recent Emotions: No emotions added yet. You can use `collect_emotion` to add some. (You should not send 'ID' in your message directly.)")
+        prompt_parts.append("Recent Emotions: No emotions added yet. You can use `xemo_collect_emotion` to add some. (You should not send 'ID' in your message directly.)")
 
     directory_prompt_lines = get_emotion_directory_prompt_lines(emotion_store)
     if directory_prompt_lines:
@@ -2098,17 +2098,17 @@ async def emotion_prompt_inject(_ctx: schemas.AgentCtx) -> str:
     addition_prompt = (
         "Attention: Emotion Plugin is a isolated self-managed plugin, you should not record the emotion ID manually by using other plugins. "
         "When you need to send an existing emotion, do NOT call vision just to inspect the image first. "
-        "When the user clearly wants you to send an emotion directly, prefer `get_best_emotion_path` with the desired reaction description and send the returned image path. "
-        "Use `search_emotion` or `browse_meme_category` only when you need to compare candidates, clean metadata, or the user explicitly asks for options; then use `get_emotion_path` for the selected emotion ID. "
+        "When the user clearly wants you to send an emotion directly, prefer `xemo_get_best_emotion_path` with the desired reaction description and send the returned image path. "
+        "Use `xemo_search_emotion` or `xemo_browse_meme_category` only when you need to compare candidates, clean metadata, or the user explicitly asks for options; then use `xemo_get_emotion_path` for the selected emotion ID. "
         "The candidate lists returned by emotion search tools are internal tool results only: do NOT quote, summarize, or expose the raw candidate list, category description, emotion ID, filename, tags, score, or matching details to the user unless the user explicitly asks for search details. "
         "If the goal is to send an emotion, silently choose the best candidate and send the emotion directly. "
         + (
-            "When collecting an emotion, you MUST choose the best matching `category` from Available Meme Categories according to the image description, emotion and usage scenario, then pass it to `collect_emotion`; leave `category` empty only when no category is suitable. "
+            "When collecting an emotion, you MUST choose the best matching `category` from Available Meme Categories according to the image description, emotion and usage scenario, then pass it to `xemo_collect_emotion`; leave `category` empty only when no category is suitable. "
             if emotion_config.ALLOW_AI_COLLECT_EMOTION
-            else "AI emotion collection is disabled by configuration; DO NOT call `collect_emotion`, and only use emotions already in the gallery. "
+            else "AI emotion collection is disabled by configuration; DO NOT call `xemo_collect_emotion`, and only use emotions already in the gallery. "
         )
         + "Search results may include vector matches and fallback tag/loose matches; prefer high confidence results when several emotions are returned. "
-        "You can use `list_meme_categories` and category-aware collect/search tools when scene categories are helpful."
+        "You can use `xemo_list_meme_categories` and category-aware collect/search tools when scene categories are helpful."
     )
 
     return "\n".join(prompt_parts) + "\n" + addition_prompt
@@ -2121,10 +2121,10 @@ async def emotion_prompt_inject(_ctx: schemas.AgentCtx) -> str:
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="收集表情包",
+    name="xemo_collect_emotion",
     description="收集表情包并进行特征打标，保存到向量数据库",
 )
-async def collect_emotion(
+async def xemo_collect_emotion(
     _ctx: schemas.AgentCtx,
     source_path: str,
     description: str,
@@ -2150,13 +2150,13 @@ async def collect_emotion(
     Example:
         ```python
         # Collect from URL
-        emotion_id = collect_emotion("https://example.com/happy_cat.gif", "一只开心的猫跳来跳去", ["开心", "猫", "可爱", "Q版"], vision_and_emotion_confirmed=True)
+        emotion_id = xemo_collect_emotion("https://example.com/happy_cat.gif", "一只开心的猫跳来跳去", ["开心", "猫", "可爱", "Q版"], vision_and_emotion_confirmed=True)
 
         # Collect from local path
-        emotion_id = collect_emotion("/app/uploads/surprised_anime_girl.png", "蓝色头发的动漫女孩一脸惊讶", ["动漫", "惊讶", "反应"], vision_and_emotion_confirmed=True) # Do not send the emotion ID in your message directly!
+        emotion_id = xemo_collect_emotion("/app/uploads/surprised_anime_girl.png", "蓝色头发的动漫女孩一脸惊讶", ["动漫", "惊讶", "反应"], vision_and_emotion_confirmed=True) # Do not send the emotion ID in your message directly!
 
         # DO NOT COLLECT ANY screenshots, photos, or other images!
-        emotion_id = collect_emotion("/app/uploads/user_screenshot.png", "用户截图", ["截图", "用户", "游戏"], vision_and_emotion_confirmed=False)  # Rejected.
+        emotion_id = xemo_collect_emotion("/app/uploads/user_screenshot.png", "用户截图", ["截图", "用户", "游戏"], vision_and_emotion_confirmed=False)  # Rejected.
         ```
     """
     if not emotion_config.ALLOW_AI_COLLECT_EMOTION:
@@ -2206,7 +2206,7 @@ async def collect_emotion(
         cleaned_tags = [*cleaned_tags, normalized_category]
 
     # 保存图片（返回 emotions 根目录相对文件名）
-    relative_path = await save_image(source_path, file_name, _ctx, category)
+    relative_path = await save_image(source_path, file_name, _ctx, normalized_category)
 
     # 检查是否有重复图片
     absolute_file_path = resolve_emotion_file_path(relative_path)
@@ -2262,10 +2262,10 @@ async def collect_emotion(
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="更新表情包",
+    name="xemo_update_emotion",
     description="更新表情包的描述和标签",
 )
-async def update_emotion(
+async def xemo_update_emotion(
     _ctx: schemas.AgentCtx,
     emotion_id: str,
     description: str,
@@ -2288,7 +2288,7 @@ async def update_emotion(
     Example:
         ```python
         # Update emotion metadata
-        updated_id = update_emotion("a1b2c3d4", description="一只超可爱的猫猫", tags=["可爱", "猫咪", "萌"])
+        updated_id = xemo_update_emotion("a1b2c3d4", description="一只超可爱的猫猫", tags=["可爱", "猫咪", "萌"])
         ```
     """
     # 参数验证
@@ -2328,10 +2328,10 @@ async def update_emotion(
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="删除表情包",
+    name="xemo_remove_emotion",
     description="删除表情包，并从向量数据库中移除",
 )
-async def remove_emotion(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
+async def xemo_remove_emotion(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
     """Remove Emotion (删除表情包)
 
     Remove an emotion from the database by its ID.
@@ -2345,7 +2345,7 @@ async def remove_emotion(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
     Example:
         ```python
         # Remove an emotion
-        result = remove_emotion("a1b2c3d4")
+        result = xemo_remove_emotion("a1b2c3d4")
         ```
     """
     # 参数验证
@@ -2411,10 +2411,10 @@ async def remove_emotion(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="获取表情包路径",
+    name="xemo_get_emotion_path",
     description="获取表情包文件路径",
 )
-async def get_emotion_path(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
+async def xemo_get_emotion_path(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
     """Get Emotion Path
 
     Get the path of an emotion by its ID.
@@ -2428,7 +2428,7 @@ async def get_emotion_path(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
     Example:
         ```python
         # Get emotion path and use it in another function
-        emotion_file_path = get_emotion_path("a1b2c3d4")
+        emotion_file_path = xemo_get_emotion_path("a1b2c3d4")
         # Send it or do something ... But DO NOT do any addition record for this emotion file!
         ```
     """
@@ -2464,10 +2464,10 @@ async def get_emotion_path(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="获取最佳表情包路径",
+    name="xemo_get_best_emotion_path",
     description="根据文本描述直接获取最匹配的表情包文件路径，用户要求发送表情时优先使用",
 )
-async def get_best_emotion_path(_ctx: schemas.AgentCtx, query: str) -> str:
+async def xemo_get_best_emotion_path(_ctx: schemas.AgentCtx, query: str) -> str:
     """Get Best Emotion Path
 
     Search existing emotions by text and return the upload path of the best
@@ -2481,7 +2481,7 @@ async def get_best_emotion_path(_ctx: schemas.AgentCtx, query: str) -> str:
 
     Example:
         ```python
-        emotion_file_path = get_best_emotion_path("伤心")
+        emotion_file_path = xemo_get_best_emotion_path("伤心")
         ```
     """
     if not query.strip():
@@ -2534,17 +2534,17 @@ async def get_best_emotion_path(_ctx: schemas.AgentCtx, query: str) -> str:
 
     for emotion_id, metadata, _score in combined_matches:
         if resolve_emotion_file_path(metadata.file_path).exists():
-            return await get_emotion_path(_ctx, emotion_id)
+            return await xemo_get_emotion_path(_ctx, emotion_id)
 
     raise ValueError(f"没有找到与 `{query}` 相关的可用表情。")
 
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="同步统一图库图床",
+    name="xemo_sync_meme_image_host",
     description="执行统一图库与图床的同步任务，支持 status/upload/download/sync_all/overwrite_to_remote/overwrite_from_remote",
 )
-async def sync_meme_image_host(_ctx: schemas.AgentCtx, task: str = "status") -> str:
+async def xemo_sync_meme_image_host(_ctx: schemas.AgentCtx, task: str = "status") -> str:
     """Sync meme gallery with the configured image host.
 
     Run a unified gallery sync task against the configured image host provider.
@@ -2560,10 +2560,10 @@ async def sync_meme_image_host(_ctx: schemas.AgentCtx, task: str = "status") -> 
     Example:
         ```python
         # Check sync status
-        result = sync_meme_image_host("status")
+        result = xemo_sync_meme_image_host("status")
 
         # Upload local gallery changes to remote image host
-        result = sync_meme_image_host("upload")
+        result = xemo_sync_meme_image_host("upload")
         ```
     """
     result = await run_image_sync_task(task)
@@ -2572,10 +2572,10 @@ async def sync_meme_image_host(_ctx: schemas.AgentCtx, task: str = "status") -> 
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.AGENT,
-    name="查看表情包分类",
+    name="xemo_list_meme_categories",
     description="查看按场景组织的表情包图库分类、描述与数量",
 )
-async def list_meme_categories(_ctx: schemas.AgentCtx) -> str:
+async def xemo_list_meme_categories(_ctx: schemas.AgentCtx) -> str:
     """List meme categories (查看表情包分类).
 
     Return the current gallery categories, their descriptions, and image counts
@@ -2586,7 +2586,7 @@ async def list_meme_categories(_ctx: schemas.AgentCtx) -> str:
 
     Example:
         ```python
-        categories_json = list_meme_categories()
+        categories_json = xemo_list_meme_categories()
         ```
     """
     descriptions = sync_category_descriptions_with_filesystem()
@@ -2608,10 +2608,10 @@ async def list_meme_categories(_ctx: schemas.AgentCtx) -> str:
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="更新表情包分类描述",
+    name="xemo_update_meme_category",
     description="新增或更新一个表情包场景分类的说明",
 )
-async def update_meme_category(
+async def xemo_update_meme_category(
     _ctx: schemas.AgentCtx,
     category: str,
     description: str,
@@ -2627,7 +2627,7 @@ async def update_meme_category(
 
     Example:
         ```python
-        category_name = update_meme_category("happy", "适合开心、庆祝、轻松等场景")
+        category_name = xemo_update_meme_category("happy", "适合开心、庆祝、轻松等场景")
         ```
     """
     safe_category = _safe_category_name(category)
@@ -2644,10 +2644,10 @@ async def update_meme_category(
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="添加图片到统一图库",
+    name="xemo_add_meme_to_category",
     description="把图片加入统一图库并记录分类元数据；如需语义检索请使用收集表情包",
 )
-async def add_meme_to_category(
+async def xemo_add_meme_to_category(
     _ctx: schemas.AgentCtx,
     source_path: str,
     category: str,
@@ -2663,7 +2663,7 @@ async def add_meme_to_category(
 
     Example:
         ```python
-        saved_path = add_meme_to_category("/app/uploads/happy_cat.png", "happy")
+        saved_path = xemo_add_meme_to_category("/app/uploads/happy_cat.png", "happy")
         ```
     """
     if not emotion_config.ENABLE_CATEGORY_GALLERY:
@@ -2674,10 +2674,10 @@ async def add_meme_to_category(
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="浏览分类表情包",
+    name="xemo_browse_meme_category",
     description="按分类浏览表情包元数据候选列表，仅供内部选图，不返回图片内容",
 )
-async def browse_meme_category(
+async def xemo_browse_meme_category(
     _ctx: schemas.AgentCtx,
     category: str,
     max_results: Optional[int] = None,
@@ -2693,7 +2693,7 @@ async def browse_meme_category(
 
     Example:
         ```python
-        category_view = browse_meme_category("happy", max_results=3)
+        category_view = xemo_browse_meme_category("happy", max_results=3)
         ```
     """
     safe_category = _safe_category_name(category)
@@ -2716,16 +2716,16 @@ async def browse_meme_category(
         lines.append(
             f"{idx}. ID: {emotion_id} | 文件: {item['filename']} | 状态: {managed_text} | 描述: {description} | 标签: {tags_str}",
         )
-    lines.append("这是内部候选列表；若已选中合适结果，请直接对已建档候选调用 `get_emotion_path` 获取文件路径并发送，不要继续向用户复述候选清单。")
+    lines.append("这是内部候选列表；若已选中合适结果，请直接对已建档候选调用 `xemo_get_emotion_path` 获取文件路径并发送，不要继续向用户复述候选清单。")
     return "\n".join(lines)
 
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="搜索表情包",
+    name="xemo_search_emotion",
     description="根据文本描述搜索表情包，返回文字元数据候选而不是图片",
 )
-async def search_emotion(
+async def xemo_search_emotion(
     _ctx: schemas.AgentCtx,
     query: str,
     max_results: Optional[int] = None,
@@ -2744,7 +2744,7 @@ async def search_emotion(
     Example:
         ```python
         # Search for happy cat emotions
-        search_results = search_emotion("开心猫")
+        search_results = xemo_search_emotion("开心猫")
         ```
     """
     if not query:
@@ -2784,13 +2784,16 @@ async def search_emotion(
         emotion_id = result.payload.get("emotion_id") if result.payload else None
         if not emotion_id:
             emotion_id = format(result.id, "x")
-        metadata = emotion_store.get_emotion(emotion_id)
+        resolved_emotion_id = emotion_store.resolve_emotion_id(str(emotion_id))
+        if not resolved_emotion_id:
+            continue
+        metadata = emotion_store.get_emotion(resolved_emotion_id)
         if not metadata:
             continue
         if score < emotion_config.SIMILARITY_THRESHOLD:
             continue
-        vector_matches.append((emotion_id, metadata, score))
-        matched_ids.add(emotion_id)
+        vector_matches.append((resolved_emotion_id, metadata, score))
+        matched_ids.add(resolved_emotion_id)
 
     fallback_matches = fallback_emotion_matches(
         query,
@@ -2805,7 +2808,7 @@ async def search_emotion(
 
     found_count = 0
     lines = [
-        "内部工具结果：仅用于选择候选表情，禁止原样转发或复述给用户；如果你的目标是发送表情，请直接选中候选并调用 `get_emotion_path`。",
+        "内部工具结果：仅用于选择候选表情，禁止原样转发或复述给用户；如果你的目标是发送表情，请直接选中候选并调用 `xemo_get_emotion_path`。",
         f"查询: {query}",
         "以下是按语义和标签匹配得到的表情候选；发送已有表情时不需要先调用视觉查看图片。",
     ]
@@ -2815,7 +2818,6 @@ async def search_emotion(
             continue
 
         tags_str = ", ".join(metadata.tags) if metadata.tags else "No tags"
-        category_str = f"\nCategory: {metadata.category}" if metadata.category else ""
         source_text = "vector" if emotion_id in matched_ids else "fallback tag/loose"
         confidence_text = "high confidence" if is_high_confidence_score(score) else "normal confidence"
         category_text = metadata.category or "未分类"
@@ -2826,8 +2828,8 @@ async def search_emotion(
 
     if not found_count:
         return f"查询 `{query}` 命中了记录，但没有找到可用的表情文件。"
-    lines.append("选中后请直接调用 `get_emotion_path` 获取该表情文件路径并发送。")
-    lines.append("如果发现描述不准，请立即调用 `update_emotion` 修正；如果发现是截图、照片等非表情内容，请立即调用 `remove_emotion` 删除。")
+    lines.append("选中后请直接调用 `xemo_get_emotion_path` 获取该表情文件路径并发送。")
+    lines.append("如果发现描述不准，请立即调用 `xemo_update_emotion` 修正；如果发现是截图、照片等非表情内容，请立即调用 `xemo_remove_emotion` 删除。")
     return "\n".join(lines)
 
 
@@ -4098,7 +4100,7 @@ boot().catch(showResult);
             raise HTTPException(status_code=400, detail=str(e)) from e
 
     @router.post("/api/emotions/{emotion_id}", summary="实时更新表情描述和标签", dependencies=[Depends(webui_auth_dependency)])
-    async def api_update_emotion(emotion_id: str, payload: Dict[str, Any]):
+    async def api_xemo_update_emotion(emotion_id: str, payload: Dict[str, Any]):
         description = str(payload.get("description", "")).strip()
         tags_value = payload.get("tags", [])
         if isinstance(tags_value, str):
