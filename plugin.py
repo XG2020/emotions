@@ -12,17 +12,17 @@
 ## 使用方法
 
 - **与 AI 对话**: 在聊天中发送图片，AI 会引导您完成收藏。您也可以直接命令 AI "帮我收藏这张图"。
-- **使用命令**: 通过 `emo_search` 等命令直接搜索和管理表情包。
+- **使用命令**: 通过 `xemo_search` 等命令直接搜索和管理表情包。
 
 ## 命令列表
 
 **注意：所有命令目前仅在 OneBot v11 适配器下可用。**
 
-- `emo_search <关键词>`: 语义搜索表情包。
-- `emo_stats`: 查看表情包统计信息。
-- `emo_list [页码]`: 分页列出所有表情包，并默认预览图片。
-- `emo_migrate`: 迁移旧的绝对路径到相对路径格式（适用于数据目录迁移后）。
-- `emo_reindex -y`: 重建索引（高级功能，一般无需使用）。
+- `xemo_search <关键词>`: 语义搜索表情包。
+- `xemo_stats`: 查看表情包统计信息。
+- `xemo_list [页码]`: 分页列出所有表情包，并默认预览图片。
+- `xemo_migrate`: 迁移旧的绝对路径到相对路径格式（适用于数据目录迁移后）。
+- `xemo_reindex -y`: 重建索引（高级功能，一般无需使用）。
 
 ## 配置说明
 
@@ -1505,10 +1505,10 @@ def get_emotion_directory_prompt_lines(emotion_store: EmotionStore) -> List[str]
 
 # region: 表情包命令
 @plugin.mount_command(
-    name="emo_search",
+    name="xemo_search",
     description="语义搜索表情包",
     aliases=[],
-    usage="emo_search <关键词>",
+    usage="xemo_search <关键词>",
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
@@ -1615,7 +1615,7 @@ async def emo_search_cmd(
 
 
 @plugin.mount_command(
-    name="emo_stats",
+    name="xemo_stats",
     description="查看表情包统计信息",
     aliases=[],
     permission=CommandPermission.SUPER_USER,
@@ -1647,7 +1647,7 @@ async def emo_stats_cmd(context: CommandExecutionContext) -> CommandResponse:
 
 
 def _parse_emo_list_page(args_str: str) -> int:
-    """解析 emo_list 的页码。
+    """解析 xemo_list 的页码。
 
     兼容旧版 `-i/--image` 预览参数，但现在默认就会带图片。
     """
@@ -1665,10 +1665,10 @@ def _parse_emo_list_page(args_str: str) -> int:
 
 
 @plugin.mount_command(
-    name="emo_list",
+    name="xemo_list",
     description="分页列出所有表情包",
-    aliases=["emo_ls"],
-    usage="emo_list [页码]",
+    aliases=["xemo_ls"],
+    usage="xemo_list [页码]",
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
@@ -1732,16 +1732,16 @@ async def emo_list_cmd(
     return CmdCtl.success([
         CommandOutputSegment(
             type=CommandOutputSegmentType.TEXT,
-            text=f"第 {page}/{total_pages} 页表情包预览，共 {preview_count} 个，使用 emo_list <页码> 查看其他页面",
+            text=f"第 {page}/{total_pages} 页表情包预览，共 {preview_count} 个，使用 xemo_list <页码> 查看其他页面",
         ),
         *output_segments,
     ])
 
 
 @plugin.mount_command(
-    name="emo_gallery",
+    name="xemo_gallery",
     description="查看分类图库统计",
-    aliases=["emo_categories"],
+    aliases=["xemo_categories"],
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
@@ -1759,10 +1759,10 @@ async def emo_gallery_cmd(context: CommandExecutionContext) -> CommandResponse:
 
 
 @plugin.mount_command(
-    name="emo_category_update",
+    name="xemo_category_update",
     description="新增或更新分类描述",
     aliases=[],
-    usage="emo_category_update <分类> <描述>",
+    usage="xemo_category_update <分类> <描述>",
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
@@ -1772,7 +1772,7 @@ async def emo_category_update_cmd(
 ) -> CommandResponse:
     parts = args_str.split(maxsplit=1)
     if len(parts) != 2:
-        return CmdCtl.failed("用法：emo_category_update <分类> <描述>")
+        return CmdCtl.failed("用法：xemo_category_update <分类> <描述>")
 
     category_name = _safe_category_name(parts[0])
     description = parts[1].strip()
@@ -1786,10 +1786,10 @@ async def emo_category_update_cmd(
 
 
 @plugin.mount_command(
-    name="emo_category_clear",
+    name="xemo_category_clear",
     description="清空指定分类图库中的图片但保留分类描述",
     aliases=[],
-    usage="emo_category_clear <分类> -y",
+    usage="xemo_category_clear <分类> -y",
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
@@ -1799,7 +1799,7 @@ async def emo_category_clear_cmd(
 ) -> CommandResponse:
     tokens = args_str.split()
     if len(tokens) < 2 or "-y" not in tokens:
-        return CmdCtl.failed("用法：emo_category_clear <分类> -y")
+        return CmdCtl.failed("用法：xemo_category_clear <分类> -y")
 
     category_name = _safe_category_name(tokens[0])
     emotion_store = await load_emotion_store()
@@ -1840,10 +1840,10 @@ async def emo_category_clear_cmd(
 
 
 @plugin.mount_command(
-    name="emo_sync",
+    name="xemo_sync",
     description="同步分类图库到图床或从图床同步回来",
-    aliases=["emo_img_sync"],
-    usage="emo_sync <status|upload|download|sync_all|overwrite_to_remote|overwrite_from_remote>",
+    aliases=["xemo_img_sync"],
+    usage="xemo_sync <status|upload|download|sync_all|overwrite_to_remote|overwrite_from_remote>",
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
@@ -1860,7 +1860,7 @@ async def emo_sync_cmd(
 
 
 @plugin.mount_command(
-    name="emo_migrate",
+    name="xemo_migrate",
     description="迁移表情包路径到新格式",
     aliases=[],
     permission=CommandPermission.SUPER_USER,
@@ -1880,9 +1880,9 @@ async def emo_migrate_cmd(context: CommandExecutionContext) -> CommandResponse:
 
 
 @plugin.mount_command(
-    name="emo_gallery_check",
+    name="xemo_gallery_check",
     description="验证统一图库状态",
-    aliases=["emo_check"],
+    aliases=["xemo_check"],
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
@@ -1911,10 +1911,10 @@ async def emo_gallery_check_cmd(context: CommandExecutionContext) -> CommandResp
 
 
 @plugin.mount_command(
-    name="emo_reindex",
+    name="xemo_reindex",
     description="重建表情包索引",
     aliases=[],
-    usage="emo_reindex -y",
+    usage="xemo_reindex -y",
     permission=CommandPermission.SUPER_USER,
     category="表情包",
 )
