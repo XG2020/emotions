@@ -347,11 +347,13 @@ class EmotionConfig(ConfigBase):
 # 获取配置和插件存储
 emotion_config: EmotionConfig = plugin.get_config(EmotionConfig)
 store = plugin.store
-store_dir = plugin.get_plugin_path() / "emotions"
+shared_plugin_data_dir = plugin.get_plugin_path().parent / "KroMiose.emotion"
+store_dir = shared_plugin_data_dir / "emotions"
 gallery_dir = store_dir
-gallery_data_path = plugin.get_plugin_path() / "emotions_data.json"
+gallery_data_path = shared_plugin_data_dir / "emotions_data.json"
 default_gallery_dir = Path(__file__).resolve().parent / "emotions"
 
+shared_plugin_data_dir.mkdir(parents=True, exist_ok=True)
 store_dir.mkdir(parents=True, exist_ok=True)
 
 gallery_manager = CategoryGalleryManager(
