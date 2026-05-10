@@ -347,13 +347,11 @@ class EmotionConfig(ConfigBase):
 # 获取配置和插件存储
 emotion_config: EmotionConfig = plugin.get_config(EmotionConfig)
 store = plugin.store
-shared_plugin_data_dir = plugin.get_plugin_path().parent / "KroMiose.emotion"
-store_dir = shared_plugin_data_dir / "emotions"
+store_dir = plugin.get_plugin_path() / "emotions"
 gallery_dir = store_dir
-gallery_data_path = shared_plugin_data_dir / "emotions_data.json"
+gallery_data_path = plugin.get_plugin_path() / "emotions_data.json"
 default_gallery_dir = Path(__file__).resolve().parent / "emotions"
 
-shared_plugin_data_dir.mkdir(parents=True, exist_ok=True)
 store_dir.mkdir(parents=True, exist_ok=True)
 
 gallery_manager = CategoryGalleryManager(
@@ -2040,6 +2038,8 @@ async def emotion_prompt_inject(_ctx: schemas.AgentCtx) -> str:
         "Attention: Emotion Plugin is a isolated self-managed plugin, you should not record the emotion ID manually by using other plugins. "
         "When you need to send an existing emotion, do NOT call vision just to inspect the image first. "
         "Prefer `search_emotion` or `browse_meme_category` to get text metadata candidates, then use `get_emotion_path` for the selected emotion ID. "
+        "The candidate list returned by these tools is for your internal selection only; do NOT paste or enumerate it to the user unless the user explicitly asks for options. "
+        "If you already find a suitable emotion, call `get_emotion_path` and send the image directly. "
         + (
             "When collecting an emotion, you MUST choose the best matching `category` from Available Meme Categories according to the image description, emotion and usage scenario, then pass it to `collect_emotion`; leave `category` empty only when no category is suitable. "
             if emotion_config.ALLOW_AI_COLLECT_EMOTION
@@ -2587,7 +2587,7 @@ async def add_meme_to_category(
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
     name="浏览分类表情包",
-    description="按分类浏览表情包元数据候选列表，不返回图片内容",
+    description="按分类浏览表情包元数据候选列表，仅供内部选图，不返回图片内容",
 )
 async def browse_meme_category(
     _ctx: schemas.AgentCtx,
@@ -2601,7 +2601,7 @@ async def browse_meme_category(
         max_results (int, optional): Maximum number of images to observe
 
     Returns:
-        str: Formatted candidate list with emotion IDs and metadata
+        str: 仅供内部选图使用的候选列表，不应原样回复给用户
 
     Example:
         ```python
@@ -2618,7 +2618,7 @@ async def browse_meme_category(
     lines = [
         f"分类: {safe_category}",
         f"分类描述: {descriptions.get(safe_category, '无描述')}",
-        "以下是可直接发送的表情候选，请根据描述/标签选择；不需要先调用视觉查看图片。",
+        "以下是供内部选图使用的表情候选，请根据描述/标签选择；不要原样转发给用户；不需要先调用视觉查看图片。",
     ]
     for idx, item in enumerate(items[:limit], 1):
         tags_str = ", ".join(item.get("tags") or []) or "无标签"
@@ -2628,14 +2628,14 @@ async def browse_meme_category(
         lines.append(
             f"{idx}. ID: {emotion_id} | 文件: {item['filename']} | 状态: {managed_text} | 描述: {description} | 标签: {tags_str}",
         )
-    lines.append("选中后，如需发送，请对已建档候选调用 `get_emotion_path` 获取文件路径。")
+    lines.append("这是内部候选列表；若已选中合适结果，请直接对已建档候选调用 `get_emotion_path` 获取文件路径并发送，不要继续向用户复述候选清单。")
     return "\n".join(lines)
 
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
     name="搜索表情包",
-    description="根据文本描述搜索表情包，返回文字元数据候选而不是图片",
+    description="根据文本描述搜索表情包，返回仅供内部选图的文字候选而不是图片",
 )
 async def search_emotion(
     _ctx: schemas.AgentCtx,
@@ -2651,7 +2651,7 @@ async def search_emotion(
         max_results (int, optional): Maximum number of results to observe (recommended: 3-5)
 
     Returns:
-        str: Formatted candidate list with emotion IDs and metadata
+        str: 仅供内部选图使用的候选列表，不应原样回复给用户
 
     Example:
         ```python
@@ -2718,7 +2718,7 @@ async def search_emotion(
     found_count = 0
     lines = [
         f"查询: {query}",
-        "以下是按语义和标签匹配得到的表情候选；发送已有表情时不需要先调用视觉查看图片。",
+        "以下是按语义和标签匹配得到的内部候选列表；不要原样转发给用户；发送已有表情时不需要先调用视觉查看图片。",
     ]
     for i, (emotion_id, metadata, score) in enumerate(combined_matches, 1):
         file_path = resolve_emotion_file_path(metadata.file_path)
@@ -2737,7 +2737,7 @@ async def search_emotion(
 
     if not found_count:
         return f"查询 `{query}` 命中了记录，但没有找到可用的表情文件。"
-    lines.append("选中后请直接调用 `get_emotion_path` 获取该表情文件路径并发送。")
+    lines.append("这是内部候选列表；选中后请直接调用 `get_emotion_path` 获取该表情文件路径并发送，不要继续向用户枚举候选内容。")
     lines.append("如果发现描述不准，请立即调用 `update_emotion` 修正；如果发现是截图、照片等非表情内容，请立即调用 `remove_emotion` 删除。")
     return "\n".join(lines)
 
