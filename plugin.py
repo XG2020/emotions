@@ -885,13 +885,21 @@ async def update_emotion_metadata_realtime(
     if normalized_category and normalized_category not in cleaned_tags:
         cleaned_tags = [*cleaned_tags, normalized_category]
 
+    previous_metadata = EmotionMetadata.model_validate(metadata.model_dump())
+    previous_recent_ids = list(emotion_store.recent_emotion_ids)
     metadata.description = description.strip()
     metadata.tags = cleaned_tags
     metadata.category = normalized_category
     metadata.last_updated = int(time.time())
     emotion_store.add_emotion(emotion_id, metadata)
     await save_emotion_store(emotion_store)
-    await upsert_emotion_vector(emotion_id, metadata)
+    try:
+        await upsert_emotion_vector(emotion_id, metadata)
+    except Exception:
+        emotion_store.emotions[emotion_id] = previous_metadata
+        emotion_store.recent_emotion_ids = previous_recent_ids
+        await save_emotion_store(emotion_store)
+        raise
     return metadata
 
 
@@ -932,7 +940,13 @@ async def upsert_emotion_metadata_by_filename(
     )
     emotion_store.add_emotion(emotion_id, metadata)
     await save_emotion_store(emotion_store)
-    await upsert_emotion_vector(emotion_id, metadata)
+    try:
+        await upsert_emotion_vector(emotion_id, metadata)
+    except Exception:
+        emotion_store.emotions.pop(emotion_id, None)
+        emotion_store.recent_emotion_ids = [item for item in emotion_store.recent_emotion_ids if item != emotion_id]
+        await save_emotion_store(emotion_store)
+        raise
     return emotion_id, metadata, True
 
 
@@ -1263,7 +1277,7 @@ async def save_image(
     file_name: str,
     _ctx: schemas.AgentCtx,
     category: Optional[str] = None,
-) -> Tuple[bool, str]:
+) -> str:
     """保存图片到表情包存储目录
 
     Args:
@@ -1273,23 +1287,36 @@ async def save_image(
         category (Optional[str]): 表情分类，未指定时归入未分类
 
     Returns:
-        Tuple[bool, str]: (是否成功, 相对路径)
+        str: 保存后的相对路径
     """
-    target_path = store_dir / Path(file_name).name
+    safe_name = Path(file_name).name
+    target_path = store_dir / safe_name
+    if target_path.exists():
+        stem = target_path.stem
+        suffix = target_path.suffix
+        for index in range(1, 1000):
+            candidate = target_path.with_name(f"{stem}_{index}{suffix}")
+            if not candidate.exists():
+                target_path = candidate
+                break
+        else:
+            target_path = target_path.with_name(f"{stem}_{int(time.time())}{suffix}")
     relative_path = target_path.name
 
     if source_path.startswith(("http://", "https://")):
         logger.info(f"从URL下载图片: {source_path} 到 {target_path}")
         success = await download_image(source_path, target_path)
-        return success, relative_path
+        if not success:
+            target_path.unlink(missing_ok=True)
+            raise ValueError(f"Error: Failed to download image from {source_path}")
+        return relative_path
 
     try:
         source_path_obj = convert_to_host_path(Path(source_path), _ctx.chat_key)
         logger.info(f"从本地路径复制图片: {source_path_obj} 到 {target_path}")
 
         if not source_path_obj.exists():
-            logger.error(f"图片不存在: {source_path}")
-            return False, relative_path
+            raise ValueError(f"图片不存在: {source_path}")
 
         async with aiofiles.open(source_path_obj, "rb") as src_file:
             content = await src_file.read()
@@ -1298,10 +1325,11 @@ async def save_image(
             await target_file.write(content)
 
     except Exception as e:
+        target_path.unlink(missing_ok=True)
         logger.error(f"保存图片失败: {source_path}, 错误: {e}")
-        return False, relative_path
+        raise ValueError(f"保存图片失败: {source_path}") from e
     else:
-        return True, relative_path
+        return relative_path
 
 
 def generate_emotion_id(file_path: str, description: str) -> str:
@@ -2098,11 +2126,7 @@ async def collect_emotion(
         ```
     """
     if not emotion_config.ALLOW_AI_COLLECT_EMOTION:
-        await message_service.push_system_message(
-            _ctx.chat_key,
-            "AI emotion collection is disabled by configuration. Use existing gallery emotions only.",
-        )
-        return ""
+        raise ValueError("AI emotion collection is disabled by configuration. Use existing gallery emotions only.")
 
     if not source_path:
         raise ValueError("Error: Source path cannot be empty!")
@@ -2119,11 +2143,7 @@ async def collect_emotion(
         tags = [*tags, normalized_category]
 
     if not vision_and_emotion_confirmed:
-        await message_service.push_system_message(
-            _ctx.chat_key,
-            "Image content is not confirmed by vision or it is a screenshot! You CANT COLLECT ANY screenshots, photos, or other images! Rejected.",
-        )
-        return ""
+        raise ValueError("Image content is not confirmed by vision or it is a screenshot; collection rejected.")
 
     # 确保表情包目录存在
     store_dir.mkdir(parents=True, exist_ok=True)
@@ -2147,66 +2167,30 @@ async def collect_emotion(
     path_obj = Path(file_name)
     file_name = f"{path_obj.stem}_{hashlib.md5(description.encode()).hexdigest()[:6]}{path_obj.suffix}"
 
+    cleaned_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+    if normalized_category and normalized_category not in cleaned_tags:
+        cleaned_tags = [*cleaned_tags, normalized_category]
+
     # 保存图片（返回 emotions 根目录相对文件名）
-    success, relative_path = await save_image(source_path, file_name, _ctx, category)
-    if not success:
-        raise ValueError(f"Error: Failed to save image from {source_path}")
+    relative_path = await save_image(source_path, file_name, _ctx, category)
 
     # 检查是否有重复图片
     absolute_file_path = resolve_emotion_file_path(relative_path)
     duplicate_id = await find_duplicate_emotion(absolute_file_path)
 
+    if duplicate_id:
+        absolute_file_path.unlink(missing_ok=True)
+        logger.info(f"表情包已存在，更新信息: {duplicate_id}")
+        await update_emotion_metadata_realtime(
+            emotion_id=duplicate_id,
+            description=description,
+            tags=cleaned_tags,
+            category=normalized_category,
+        )
+        return duplicate_id
+
     # 加载表情包存储
     emotion_store = await load_emotion_store()
-
-    if duplicate_id:
-        # 更新已存在的表情包信息
-        logger.info(f"表情包已存在，更新信息: {duplicate_id}")
-        metadata = emotion_store.get_emotion(duplicate_id)
-        if metadata:
-            # 更新元数据
-            metadata.update(description, tags)
-            metadata.category = normalized_category
-            emotion_store.add_emotion(duplicate_id, metadata)
-
-            # 生成嵌入向量
-            embedding = await generate_embedding(f"{description} {' '.join(tags)}")
-
-            # 获取Qdrant客户端
-            client = await get_qdrant_client()
-
-            # 更新Qdrant向量数据库中的向量
-            try:
-                # 先删除旧点
-                await client.delete(
-                    collection_name=plugin.get_vector_collection_name(),
-                    points_selector=qdrant_models.PointIdsList(
-                        points=[int(duplicate_id, 16)],
-                    ),
-                )
-                logger.info(f"已删除Qdrant中的旧点: {duplicate_id}")
-            except Exception as e:
-                logger.warning(f"删除Qdrant中的旧点失败，可能不存在: {e}")
-
-            # 添加新点
-            await client.upsert(
-                collection_name=plugin.get_vector_collection_name(),
-                points=[
-                    qdrant_models.PointStruct(
-                        id=int(duplicate_id, 16),  # 将十六进制字符串转换为整数
-                        vector=embedding,
-                        payload={
-                            "description": description,
-                            "tags": tags,
-                            "emotion_id": duplicate_id,  # 保存原始ID以便后续检索
-                        },
-                    ),
-                ],
-            )
-            logger.info(f"已添加新向量到Qdrant: {duplicate_id}")
-
-            await save_emotion_store(emotion_store)
-            return duplicate_id
 
     # 生成唯一ID
     emotion_id = generate_emotion_id(relative_path, description)
@@ -2214,7 +2198,7 @@ async def collect_emotion(
     # 创建元数据（使用相对路径）
     metadata = EmotionMetadata.create(
         description=description,
-        tags=tags,
+        tags=cleaned_tags,
         source_path=source_path,
         file_path=relative_path,  # 保存相对路径
         category=normalized_category,
@@ -2226,33 +2210,17 @@ async def collect_emotion(
 
     # 添加到向量数据库
     try:
-        # 生成嵌入向量
-        embedding = await generate_embedding(f"{description} {' '.join(tags)}")
-
-        # 获取Qdrant客户端
-        client = await get_qdrant_client()
-
-        # 添加到Qdrant向量数据库
-        await client.upsert(
-            collection_name=plugin.get_vector_collection_name(),
-            points=[
-                qdrant_models.PointStruct(
-                    id=int(emotion_id, 16),  # 将十六进制字符串转换为整数
-                    vector=embedding,
-                    payload={
-                        "description": description,
-                        "tags": tags,
-                        "emotion_id": emotion_id,  # 保存原始ID以便后续检索
-                    },
-                ),
-            ],
-        )
+        await upsert_emotion_vector(emotion_id, metadata)
         logger.info(f"已添加表情包描述新向量到Qdrant: {emotion_id}")
     except Exception as e:
+        emotion_store.emotions.pop(emotion_id, None)
+        emotion_store.recent_emotion_ids = [item for item in emotion_store.recent_emotion_ids if item != emotion_id]
+        await save_emotion_store(emotion_store)
+        absolute_file_path.unlink(missing_ok=True)
         raise ValueError(f"添加到向量数据库失败: {e}") from e
     await message_service.push_system_message(
         _ctx.chat_key,
-        f"Successfully collected emotion: {emotion_id} - {description} {' '.join(tags)} ({source_path=})",
+        f"Successfully collected emotion: {emotion_id} - {description} {' '.join(cleaned_tags)} ({source_path=})",
     )
 
     return emotion_id
@@ -2672,6 +2640,8 @@ async def search_emotion(
 
     # 获取Qdrant客户端
     client = await get_qdrant_client()
+    if client is None:
+        raise ValueError("无法获取 Qdrant 客户端")
 
     # 进行向量搜索
     try:
@@ -2683,7 +2653,7 @@ async def search_emotion(
         )
     except Exception as e:
         logger.error(f"向量搜索失败: {e}")
-        return f"搜索表情包失败: {e}"
+        raise ValueError(f"搜索表情包失败: {e}") from e
 
     # 加载表情包存储
     emotion_store = await load_emotion_store()
