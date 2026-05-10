@@ -77,15 +77,15 @@ from .gallery import CategoryGalleryManager, is_supported_image_file, safe_categ
 from .image_host import ImageHostService
 
 plugin = NekroPlugin(
-    name="emotions",
+    name="表情管理",
     module_name="emotions",
     description="提供收集、搜索、使用表情包能力，使用Qdrant向量数据库",
     version="1.0.0",
     author="xggm",
-    url="https://github.com/KroMiose/nekro-agent",
+    url="https://github.com/XG2020/emotions",
     support_adapter=["onebot_v11", "discord"],
     i18n_name=i18n.i18n_text(
-        zh_CN="emotions",
+        zh_CN="表情管理",
         en_US="emotions",
     ),
     i18n_description=i18n.i18n_text(
