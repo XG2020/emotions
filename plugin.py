@@ -1461,61 +1461,6 @@ def is_high_confidence_score(score: float) -> bool:
     return score >= emotion_config.HIGH_CONFIDENCE_THRESHOLD
 
 
-async def find_emotion_matches(
-    query: str,
-    limit: Optional[int] = None,
-) -> List[Tuple[str, EmotionMetadata, float, bool]]:
-    search_limit = limit or emotion_config.MAX_SEARCH_RESULTS
-    query_embedding = await generate_embedding(query)
-    client = await get_qdrant_client()
-    if client is None:
-        raise ValueError("无法获取 Qdrant 客户端")
-    try:
-        search_results = await client.search(
-            collection_name=plugin.get_vector_collection_name(),
-            query_vector=query_embedding,
-            limit=search_limit,
-            with_payload=True,
-        )
-    except Exception as e:
-        logger.error(f"向量搜索失败: {e}")
-        raise ValueError(f"搜索表情包失败: {e}") from e
-
-    emotion_store = await load_emotion_store()
-    vector_matches: List[Tuple[str, EmotionMetadata, float, bool]] = []
-    matched_ids: set[str] = set()
-    for result in search_results:
-        score = float(getattr(result, "score", 0.0) or 0.0)
-        emotion_id = result.payload.get("emotion_id") if result.payload else None
-        if not emotion_id:
-            emotion_id = format(result.id, "x")
-        resolved_emotion_id = emotion_store.resolve_emotion_id(str(emotion_id))
-        if not resolved_emotion_id:
-            continue
-        metadata = emotion_store.get_emotion(resolved_emotion_id)
-        if not metadata:
-            continue
-        if score < emotion_config.SIMILARITY_THRESHOLD:
-            continue
-        if not resolve_emotion_file_path(metadata.file_path).exists():
-            continue
-        vector_matches.append((resolved_emotion_id, metadata, score, True))
-        matched_ids.add(resolved_emotion_id)
-
-    fallback_matches = fallback_emotion_matches(
-        query,
-        emotion_store,
-        exclude_ids=matched_ids,
-        limit=max(0, search_limit - len(vector_matches)),
-    )
-    fallback_matches = [
-        (emotion_id, metadata, score, False)
-        for emotion_id, metadata, score in fallback_matches
-        if resolve_emotion_file_path(metadata.file_path).exists()
-    ]
-    return [*vector_matches, *fallback_matches]
-
-
 def infer_emotion_category(description: str, tags: List[str]) -> Optional[str]:
     available_categories = sync_category_descriptions_with_filesystem()
     text = f"{description} {' '.join(tags or [])}".lower()
@@ -2153,11 +2098,10 @@ async def emotion_prompt_inject(_ctx: schemas.AgentCtx) -> str:
     addition_prompt = (
         "Attention: Emotion Plugin is a isolated self-managed plugin, you should not record the emotion ID manually by using other plugins. "
         "When you need to send an existing emotion, do NOT call vision just to inspect the image first. "
-        "Prefer `send_emotion` with the user's desired reaction description; it returns the selected file path directly. "
-        "Use `search_emotion` or `browse_meme_category` only when you need to compare candidates, then use `get_emotion_path` for the selected emotion ID. "
-        "Do not reuse emotion IDs remembered from older turns after reindexing or metadata changes; if an ID fails, search again and use the latest candidate ID. "
-        "The candidate list returned by these tools is for your internal selection only; do NOT paste or enumerate it to the user unless the user explicitly asks for options. "
-        "If you already know the desired reaction, call `send_emotion` and send the returned image path directly. "
+        "When the user clearly wants you to send an emotion directly, prefer `get_best_emotion_path` with the desired reaction description and send the returned image path. "
+        "Use `search_emotion` or `browse_meme_category` only when you need to compare candidates, clean metadata, or the user explicitly asks for options; then use `get_emotion_path` for the selected emotion ID. "
+        "The candidate lists returned by emotion search tools are internal tool results only: do NOT quote, summarize, or expose the raw candidate list, category description, emotion ID, filename, tags, score, or matching details to the user unless the user explicitly asks for search details. "
+        "If the goal is to send an emotion, silently choose the best candidate and send the emotion directly. "
         + (
             "When collecting an emotion, you MUST choose the best matching `category` from Available Meme Categories according to the image description, emotion and usage scenario, then pass it to `collect_emotion`; leave `category` empty only when no category is suitable. "
             if emotion_config.ALLOW_AI_COLLECT_EMOTION
@@ -2520,41 +2464,79 @@ async def get_emotion_path(_ctx: schemas.AgentCtx, emotion_id: str) -> str:
 
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
-    name="发送匹配表情包",
-    description="根据文本描述直接选择最匹配的表情包并返回可发送文件路径；发送已有表情时优先使用这个工具",
+    name="获取最佳表情包路径",
+    description="根据文本描述直接获取最匹配的表情包文件路径，用户要求发送表情时优先使用",
 )
-async def send_emotion(_ctx: schemas.AgentCtx, query: str) -> str:
-    """Send matched emotion by query.
+async def get_best_emotion_path(_ctx: schemas.AgentCtx, query: str) -> str:
+    """Get Best Emotion Path
 
-    Search the existing emotion gallery and return the upload path of the best
-    matched emotion. Use this when the user asks to send a meme/reaction image.
+    Search existing emotions by text and return the upload path of the best
+    matched emotion directly.
 
     Args:
-        query (str): Desired emotion/reaction description, such as "伤心", "开心猫", "疑惑".
+        query (str): Desired emotion or reaction description, such as "伤心", "开心", "疑惑".
 
     Returns:
-        str: The upload path of the selected emotion file, ready to send.
+        str: The path of the best matched emotion file
 
     Example:
         ```python
-        emotion_path = send_emotion("伤心")
+        emotion_file_path = get_best_emotion_path("伤心")
         ```
     """
     if not query.strip():
         raise ValueError("Error: Search query cannot be empty!")
-    matches = await find_emotion_matches(query, 1)
-    if not matches:
-        raise ValueError(f"没有找到与 `{query}` 相关的可用表情。")
-    emotion_id, metadata, score, is_vector_match = matches[0]
+
+    search_limit = emotion_config.MAX_SEARCH_RESULTS
+    query_embedding = await generate_embedding(query)
+    client = await get_qdrant_client()
+
     try:
-        emotion_path = await get_emotion_path(_ctx, emotion_id)
+        search_results = await client.search(
+            collection_name=plugin.get_vector_collection_name(),
+            query_vector=query_embedding,
+            limit=search_limit,
+            with_payload=True,
+        )
     except Exception as e:
-        raise ValueError(f"找到候选表情但读取失败: {emotion_id}, {e}") from e
-    source_text = "vector" if is_vector_match else "fallback"
-    logger.info(
-        f"发送匹配表情: query={query}, emotion_id={emotion_id}, score={score:.3f}, source={source_text}, description={metadata.description}",
+        logger.error(f"向量搜索失败: {e}")
+        raise ValueError(f"搜索表情包失败: {e}") from e
+
+    emotion_store = await load_emotion_store()
+    vector_matches: List[Tuple[str, EmotionMetadata, float]] = []
+    matched_ids: set[str] = set()
+
+    for result in search_results:
+        score = float(getattr(result, "score", 0.0) or 0.0)
+        emotion_id = result.payload.get("emotion_id") if result.payload else None
+        if not emotion_id:
+            emotion_id = format(result.id, "x")
+        resolved_emotion_id = emotion_store.resolve_emotion_id(str(emotion_id))
+        if not resolved_emotion_id:
+            continue
+        metadata = emotion_store.get_emotion(resolved_emotion_id)
+        if not metadata:
+            continue
+        if score < emotion_config.SIMILARITY_THRESHOLD:
+            continue
+        if not resolve_emotion_file_path(metadata.file_path).exists():
+            continue
+        vector_matches.append((resolved_emotion_id, metadata, score))
+        matched_ids.add(resolved_emotion_id)
+
+    fallback_matches = fallback_emotion_matches(
+        query,
+        emotion_store,
+        exclude_ids=matched_ids,
+        limit=max(0, search_limit - len(vector_matches)),
     )
-    return emotion_path
+    combined_matches = [*vector_matches, *fallback_matches]
+
+    for emotion_id, metadata, _score in combined_matches:
+        if resolve_emotion_file_path(metadata.file_path).exists():
+            return await get_emotion_path(_ctx, emotion_id)
+
+    raise ValueError(f"没有找到与 `{query}` 相关的可用表情。")
 
 
 @plugin.mount_sandbox_method(
@@ -2589,7 +2571,7 @@ async def sync_meme_image_host(_ctx: schemas.AgentCtx, task: str = "status") -> 
 
 
 @plugin.mount_sandbox_method(
-    SandboxMethodType.TOOL,
+    SandboxMethodType.AGENT,
     name="查看表情包分类",
     description="查看按场景组织的表情包图库分类、描述与数量",
 )
@@ -2741,7 +2723,7 @@ async def browse_meme_category(
 @plugin.mount_sandbox_method(
     SandboxMethodType.TOOL,
     name="搜索表情包",
-    description="根据文本描述搜索表情包，返回仅供内部选图的文字候选而不是图片",
+    description="根据文本描述搜索表情包，返回文字元数据候选而不是图片",
 )
 async def search_emotion(
     _ctx: schemas.AgentCtx,
@@ -2757,7 +2739,7 @@ async def search_emotion(
         max_results (int, optional): Maximum number of results to observe (recommended: 3-5)
 
     Returns:
-        str: 仅供内部选图使用的候选列表，不应原样回复给用户
+        str: Formatted candidate list with emotion IDs and metadata
 
     Example:
         ```python
@@ -2768,27 +2750,83 @@ async def search_emotion(
     if not query:
         raise ValueError("Error: Search query cannot be empty!")
 
-    search_limit = max_results or emotion_config.MAX_SEARCH_RESULTS
-    combined_matches = await find_emotion_matches(query, search_limit)
+    # 设置最大结果数
+    search_limit = emotion_config.MAX_SEARCH_RESULTS
+    if max_results is not None:
+        search_limit = max_results
+
+    # 生成查询向量
+    query_embedding = await generate_embedding(query)
+
+    # 获取Qdrant客户端
+    client = await get_qdrant_client()
+
+    # 进行向量搜索
+    try:
+        search_results = await client.search(
+            collection_name=plugin.get_vector_collection_name(),
+            query_vector=query_embedding,
+            limit=search_limit,
+            with_payload=True,  # 确保返回payload以获取原始emotion_id
+        )
+    except Exception as e:
+        logger.error(f"向量搜索失败: {e}")
+        return f"搜索表情包失败: {e}"
+
+    # 加载表情包存储
+    emotion_store = await load_emotion_store()
+
+    vector_matches: List[Tuple[str, EmotionMetadata, float]] = []
+    matched_ids: set[str] = set()
+
+    for result in search_results:
+        score = float(getattr(result, "score", 0.0) or 0.0)
+        emotion_id = result.payload.get("emotion_id") if result.payload else None
+        if not emotion_id:
+            emotion_id = format(result.id, "x")
+        metadata = emotion_store.get_emotion(emotion_id)
+        if not metadata:
+            continue
+        if score < emotion_config.SIMILARITY_THRESHOLD:
+            continue
+        vector_matches.append((emotion_id, metadata, score))
+        matched_ids.add(emotion_id)
+
+    fallback_matches = fallback_emotion_matches(
+        query,
+        emotion_store,
+        exclude_ids=matched_ids,
+        limit=max(0, search_limit - len(vector_matches)),
+    )
+    combined_matches = [*vector_matches, *fallback_matches]
 
     if not combined_matches:
         return f"没有找到与 `{query}` 相关的表情。可以换个关键词，或先补充更多表情。"
 
+    found_count = 0
     lines = [
+        "内部工具结果：仅用于选择候选表情，禁止原样转发或复述给用户；如果你的目标是发送表情，请直接选中候选并调用 `get_emotion_path`。",
         f"查询: {query}",
-        "以下是按语义和标签匹配得到的内部候选列表；不要原样转发给用户；发送已有表情时不需要先调用视觉查看图片。",
+        "以下是按语义和标签匹配得到的表情候选；发送已有表情时不需要先调用视觉查看图片。",
     ]
-    for i, (emotion_id, metadata, score, is_vector_match) in enumerate(combined_matches, 1):
+    for i, (emotion_id, metadata, score) in enumerate(combined_matches, 1):
+        file_path = resolve_emotion_file_path(metadata.file_path)
+        if not file_path.exists():
+            continue
+
         tags_str = ", ".join(metadata.tags) if metadata.tags else "No tags"
-        source_text = "vector" if is_vector_match else "fallback tag/loose"
+        category_str = f"\nCategory: {metadata.category}" if metadata.category else ""
+        source_text = "vector" if emotion_id in matched_ids else "fallback tag/loose"
         confidence_text = "high confidence" if is_high_confidence_score(score) else "normal confidence"
         category_text = metadata.category or "未分类"
         lines.append(
             f"{i}. ID: {emotion_id} | 分类: {category_text} | 描述: {metadata.description} | 标签: {tags_str} | 匹配: {source_text}, {confidence_text}, score {score:.2f}",
         )
+        found_count += 1
 
-    lines.append("这是内部候选列表；选中后请直接调用 `get_emotion_path` 获取该表情文件路径并发送，不要继续向用户枚举候选内容。")
-    lines.append("如果只是要直接发送最匹配的表情，优先调用 `send_emotion`，不要把候选列表发给用户。")
+    if not found_count:
+        return f"查询 `{query}` 命中了记录，但没有找到可用的表情文件。"
+    lines.append("选中后请直接调用 `get_emotion_path` 获取该表情文件路径并发送。")
     lines.append("如果发现描述不准，请立即调用 `update_emotion` 修正；如果发现是截图、照片等非表情内容，请立即调用 `remove_emotion` 删除。")
     return "\n".join(lines)
 
